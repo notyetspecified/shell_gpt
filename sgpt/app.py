@@ -36,6 +36,12 @@ def main(
         max=1.0,
         help="Limits highest probable tokens (words).",
     ),
+    file_context: bool = typer.Option(
+        False,
+        "--file-context",
+        "-f",
+        help="Use embeddings to provide context from files in the current directory.",
+    ),
     shell: bool = typer.Option(
         False,
         "--shell",
@@ -152,6 +158,7 @@ def main(
             top_probability=top_probability,
             chat_id=repl,
             caching=cache,
+            file_context=file_context,
         )
 
     if chat:
@@ -162,6 +169,7 @@ def main(
             top_probability=top_probability,
             chat_id=chat,
             caching=cache,
+            file_context=file_context,
         )
     else:
         full_completion = DefaultHandler(role_class).handle(
@@ -170,6 +178,7 @@ def main(
             temperature=temperature,
             top_probability=top_probability,
             caching=cache,
+            file_context=file_context,
         )
 
     while shell and not stdin_passed:
@@ -190,6 +199,7 @@ def main(
                 temperature=temperature,
                 top_probability=top_probability,
                 caching=cache,
+                file_context=file_context,
             )
             continue
         break
