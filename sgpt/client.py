@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Generator, List
 from langchain.docstore.document import Document
@@ -9,11 +10,10 @@ from .cache import Cache
 from .config import cfg
 # for embeddings
 import os
+import contextlib
 from langchain.document_loaders import UnstructuredFileLoader
 from langchain.embeddings import OpenAIEmbeddings
-from langchain.indexes import VectorstoreIndexCreator
 from langchain.vectorstores import Chroma
-from langchain.indexes.vectorstore import VectorStoreIndexWrapper
 
 CACHE_LENGTH = int(cfg.get("CACHE_LENGTH"))
 CACHE_PATH = Path(cfg.get("CACHE_PATH"))
@@ -57,76 +57,133 @@ class OpenAIClient:
         :param directory_path: Path to the directory containing documents to index.
         :return: The loaded or created vector store index.
         """
-        persist_path = os.path.join(root_dir, ".vectorstore")
+        persist_path = os.path.join("/tmp", "shell_gpt", "vectorstore")
+        if self.file_context:
+            persist_path = os.path.join(root_dir, ".vectorstore")
 
         if os.path.exists(persist_path):
             vectorstore = Chroma(persist_directory=persist_path, embedding_function=OpenAIEmbeddings())
         else:
-            vectorstore = self.create_vectorstore(root_dir)
+            vectorstore = self.create_vectorstore(persist_path)
+        self.vectorstore = vectorstore
         return vectorstore
 
-    def create_vectorstore(self, root_dir):
+    def create_vectorstore(self, persist_path):
         tree_str = ""
         prefix = " "  # Prefix used for each level of depth
+        root_dir = persist_path.rsplit("/", 1)[0]
+        vs_dir = persist_path.rsplit("/", 1)[1]
         os.makedirs(root_dir, exist_ok=True)
+        persist_path = os.path.join(root_dir, vs_dir)
         file_docs = []
-
-        def add_to_tree(path, depth):
-            """Add path to the tree with the given depth."""
-            nonlocal tree_str
-            indent = prefix * depth
-            tree_str += f"{indent}{os.path.basename(path)}\n"
-
-        for path, dirs, files in os.walk(root_dir):
-            depth = path.count(os.sep) - root_dir.count(os.sep)
-            # Filter directories
-            dirs[:] = [d for d in dirs if d not in EXCLUDED_NAMES and not any(d.startswith(pat) for pat in EXCLUDED_START_PATTERNS)]
-            # Filter files
-            files = [f for f in files if os.path.splitext(f)[1].lower() not in EXCLUDED_EXTENSIONS]
-            files = [f for f in files if f not in EXCLUDED_NAMES and not any(f.startswith(pat) for pat in EXCLUDED_START_PATTERNS)]
-            # Add dirs and files to the tree, maintaining the depth
-            for name in dirs + files:
-                add_to_tree(os.path.join(path, name), depth)
-                file_path = os.path.join(path, name)
-                try:
-                    docs = UnstructuredFileLoader(file_path, unstructured_kwargs="").load()
-                    if len(docs):
-                        #print(f"Loaded {len(docs)} documents from {file_path}")
-                        file_docs.append(docs)
-                except:# Exception as e: 
-                    pass
-                    #print(f"An error occurred: {e}")
         
-        file_structure = "Present working directory structure:\n" + tree_str
-        tree_doc = Document(page_content=file_structure, metadata={"source": "local"})
-        persist_path = os.path.join(root_dir, ".vectorstore")
         vectorstore = Chroma(persist_directory=persist_path, embedding_function=OpenAIEmbeddings())
-        vectorstore.add_documents([tree_doc])
-        for docs in file_docs:
-            try:
-                vectorstore.add_documents(docs)
-            except:
-                #print("Error adding file documents to vectorstore: {}".format(docs))
-                continue
+
+        if self.file_context:
+            def add_to_tree(path, depth):
+                """Add path to the tree with the given depth."""
+                nonlocal tree_str
+                indent = prefix * depth
+                tree_str += f"{indent}{os.path.basename(path)}\n"
+            
+            for path, dirs, files in os.walk(root_dir):
+                depth = path.count(os.sep) - root_dir.count(os.sep)
+                # Filter directories
+                dirs[:] = [d for d in dirs if d not in EXCLUDED_NAMES and not any(d.startswith(pat) for pat in EXCLUDED_START_PATTERNS)]
+                # Filter files
+                files = [f for f in files if os.path.splitext(f)[1].lower() not in EXCLUDED_EXTENSIONS]
+                files = [f for f in files if f not in EXCLUDED_NAMES and not any(f.startswith(pat) for pat in EXCLUDED_START_PATTERNS)]
+                # Add dirs and files to the tree, maintaining the depth
+                for name in dirs + files:
+                    add_to_tree(os.path.join(path, name), depth)
+                    file_path = os.path.join(path, name)
+                    try:
+                        docs = UnstructuredFileLoader(file_path, unstructured_kwargs="").load()
+                        if len(docs):
+                            #print(f"Loaded {len(docs)} documents from {file_path}")
+                            file_docs.append(docs)
+                    except:# Exception as e: 
+                        pass
+                        #print(f"An error occurred: {e}")
+        
+            file_structure = "Present working directory structure:\n" + tree_str
+            tree_doc = Document(page_content=file_structure, metadata={"source": "local"})
+            vectorstore.add_documents([tree_doc])
+
+            for docs in file_docs:
+                try:
+                    vectorstore.add_documents(docs)
+                except:
+                    #print("Error adding file documents to vectorstore: {}".format(docs))
+                    continue
         return vectorstore
 
-    def add_context(self, local_path, messages):
+    def make_history(self, docs: List[Document]) -> str:
+        history = ''
+        for doc in docs:
+            #print(doc)
+            try:
+                if doc.metadata["role"]:
+                    timestamp = doc.metadata["timestamp"]
+                    history += f"{timestamp} {doc.metadata['role']}: {doc.page_content}\n"
+            except:
+                docs.remove(doc)
+                continue
+        return history
+
+    def handle_context(self, local_path, messages):
         """
         Add context to the last message in the list of messages.
         :param local_path: Path to the directory containing documents to index.
         :param messages: List of dict with messages and roles.
         :return: None.
         """
+        context = ""
         question = messages[-1]["content"]
-        vectorstore = self.load_vectorstore(local_path)
+        self.load_vectorstore(local_path)
+
         embedding_vector = OpenAIEmbeddings().embed_query(question)
-        n_results = min(len(vectorstore.get()["ids"]), 2)
-        docs = vectorstore.similarity_search_by_vector(embedding_vector, n_results)
-        # file tree docs
-        tree_docs = vectorstore.as_retriever(search_kwargs={"filter": {"source": "local"}}).get_relevant_documents('')
-        docs = tree_docs + docs
-        context = self.format_docs(docs)
-        messages[-1]["content"] = EMBEDDING_TEMPLATE.format(context=context, question=question)
+        vs_len = len(self.vectorstore.get()["ids"])
+#         n_results = min(vs_len, 2)
+        docs = []
+#         if n_results > 0:
+#             docs = self.vectorstore.similarity_search_by_vector(embedding_vector, n_results)
+
+#         n_results = min(vs_len, 10)
+        #print("n:", n_results)
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                with contextlib.redirect_stderr(devnull):
+                    last_n_docs = self.vectorstore.as_retriever(
+#                     search_kwargs={
+#                     "filter": {
+#                         "role": {
+#                             "$in": ["user", "assistant"]
+#                             }
+#                         }
+#                     }
+                    ).get_relevant_documents('')#, kwargs={"n_results": n_results})
+        #print("last:", len(last_n_docs))
+        # sort by timestamp
+        last_n_docs.sort(key=lambda x: x.metadata["timestamp"])
+
+        if len(last_n_docs) > 0:
+            history = self.make_history(last_n_docs)
+            context += history + "\n\n" + question
+        
+        if self.file_context:
+            # file tree docs
+            tree_docs = self.vectorstore.as_retriever(search_kwargs={"filter": {"source": "local"}}).get_relevant_documents("")
+            docs = tree_docs + docs
+            context += "\n\n" + self.format_docs(docs)
+            messages[-1]["content"] = EMBEDDING_TEMPLATE.format(context=context, question=question)
+        else:
+            context += "\n\n" + self.format_docs(docs)
+            messages[-1]["content"] = context + "\n\n" + question
+
+        # store question in vectorstore
+        question_doc = Document(page_content=question, metadata={"role": "user", "timestamp": str(datetime.now())})
+        self.vectorstore.add_documents([question_doc])
 
     @cache
     def _request(
@@ -148,8 +205,8 @@ class OpenAIClient:
         :return: Response body JSON.
         """
         # embeddings
-        if file_context:
-            self.add_context(os.getcwd(), messages)
+        self.file_context = file_context
+        self.handle_context(os.getcwd(), messages)
 
         stream = DISABLE_STREAMING == "false"
         data = {
@@ -176,9 +233,11 @@ class OpenAIClient:
         response.raise_for_status()
         # TODO: Optimise.
         # https://github.com/openai/openai-python/blob/237448dc072a2c062698da3f9f512fae38300c1c/openai/api_requestor.py#L98
+        str_response = ''
         if not stream:
             data = response.json()
             yield data["choices"][0]["message"]["content"]  # type: ignore
+            str_response = data["choices"][0]["message"]["content"]  # type: ignore
             return
         for line in response.iter_lines():
             # openrouter first line
@@ -194,6 +253,11 @@ class OpenAIClient:
             if "content" not in delta:
                 continue
             yield delta["content"]
+            str_response += delta["content"]
+
+        # store response in vectorstore
+        response_doc = Document(page_content=str_response, metadata={"role": "assistant", "timestamp": str(datetime.now())})
+        self.vectorstore.add_documents([response_doc])
 
     def get_completion(
         self,

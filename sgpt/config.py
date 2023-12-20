@@ -18,8 +18,8 @@ DEFAULT_CONFIG = {
     # TODO: Refactor it to CHAT_STORAGE_PATH.
     "CHAT_CACHE_PATH": os.getenv("CHAT_CACHE_PATH", str(CHAT_CACHE_PATH)),
     "CACHE_PATH": os.getenv("CACHE_PATH", str(CACHE_PATH)),
-    "CHAT_CACHE_LENGTH": int(os.getenv("CHAT_CACHE_LENGTH", "100")),
-    "CACHE_LENGTH": int(os.getenv("CHAT_CACHE_LENGTH", "100")),
+    "CHAT_CACHE_LENGTH": int(os.getenv("CHAT_CACHE_LENGTH", "20")),
+    "CACHE_LENGTH": int(os.getenv("CHAT_CACHE_LENGTH", "20")),
     "REQUEST_TIMEOUT": int(os.getenv("REQUEST_TIMEOUT", "60")),
     "DEFAULT_MODEL": os.getenv("DEFAULT_MODEL", "gpt-3.5-turbo"),
     "OPENAI_API_HOST": os.getenv("OPENAI_API_HOST", "https://api.openai.com"),
