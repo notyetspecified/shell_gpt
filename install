@@ -1,0 +1,15 @@
+#!/bin/bash
+# verify if hatch is installed
+if ! command -v hatch &> /dev/null
+then
+    echo "hatch could not be found, installing..."
+    pip install hatch
+fi
+# build the package
+hatch build
+# install the package
+pip install .
+# create a symlink to the package
+#PYV=$(ls -t ~/.local/lib/ | grep python | head -1)
+#ln -s ~/.local/lib/$PYV/site-packages/sgpt ~/.local/lib/$PYV/site-packages/shell_gpt-
+
