@@ -5,9 +5,10 @@ from typing import Dict, Generator, List
 from langchain.docstore.document import Document
 
 import requests
+import typer
 
 from .cache import Cache
-from .config import cfg
+from .config import SHELL_GPT_CONFIG_PATH, cfg
 # for embeddings
 import os
 import contextlib
@@ -230,6 +231,12 @@ class OpenAIClient:
             timeout=REQUEST_TIMEOUT,
             stream=stream,
         )
+        # Check if OPENAI_API_KEY is valid
+        if response.status_code == 401 or response.status_code == 403:
+            typer.secho(
+                f"Invalid OpenAI API key, update your config file: {SHELL_GPT_CONFIG_PATH}",
+                fg="red",
+            )
         response.raise_for_status()
         # TODO: Optimise.
         # https://github.com/openai/openai-python/blob/237448dc072a2c062698da3f9f512fae38300c1c/openai/api_requestor.py#L98
